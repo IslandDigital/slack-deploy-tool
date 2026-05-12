@@ -5,21 +5,23 @@ IaC for the AWS Lambda + Python implementation in
 
 Owns infrastructure **and** packaging. Each `terraform apply` re-zips
 `../lambda/src/` and re-deploys the function only if its hash changed.
-Secret values are written directly into Secrets Manager via
-`aws secretsmanager put-secret-value` and never pass through Terraform.
+
+Secrets (GitHub PAT, Slack signing secret) are passed as Lambda environment
+variables. The values are sourced from sensitive Terraform variables backed by
+`TF_VAR_*` shell env vars, so they never land in any file.
 
 ## What gets created
 
-- IAM role for Lambda (basic execution + Secrets Manager read on the two named secrets)
-- Two Secrets Manager entries — empty after apply, you populate them manually
+- IAM role for Lambda (basic execution / CloudWatch logs only)
 - CloudWatch log group with 14-day retention
-- Lambda function (Python 3.13, 10s timeout, 256 MB)
-- Lambda Function URL (`AuthorizationType = NONE` — Slack signs the request)
+- Lambda function (Python 3.13, 10s timeout, 256 MB) with secrets in env
+- REST API Gateway with `POST /deploy`, AWS_PROXY integration to the Lambda
+- `aws_lambda_permission` letting API Gateway invoke
 
 ## Prerequisites
 
 ```bash
-brew install terraform     # >= 1.6
+brew install terraform     # >= 1.10
 aws sts get-caller-identity --profile dangote-dev   # confirm auth
 ```
 
@@ -30,49 +32,40 @@ cd devops/terraform
 cp terraform.tfvars.example terraform.tfvars
 # edit terraform.tfvars — set github_owner, github_repo at minimum
 
+# Provide the two secrets via env vars (silent prompt — keeps them out of history)
+read -rs TF_VAR_github_token; export TF_VAR_github_token
+read -rs TF_VAR_slack_signing_secret; export TF_VAR_slack_signing_secret
+
 terraform init
 terraform plan -out tfplan
 terraform apply tfplan
 ```
 
-State is **local** for this trial. Promote to a remote `s3` backend before
-sharing the stack across machines.
+State is in S3 (`s3://slack-deploy-terr-state/slack-deploy-tool/terraform.tfstate`),
+encrypted, versioned, with native S3 locking (`use_lockfile = true`).
 
-## After apply — seed the secrets
-
-`terraform output post_apply_secret_commands` prints the exact commands. In short:
+## After apply
 
 ```bash
-GH_ID=$(terraform output -raw github_token_secret_id)
-SL_ID=$(terraform output -raw slack_signing_secret_id)
-
-aws secretsmanager put-secret-value --profile dangote-dev --region eu-west-1 \
-  --secret-id "$GH_ID" --secret-string <YOUR_GITHUB_PAT>
-
-aws secretsmanager put-secret-value --profile dangote-dev --region eu-west-1 \
-  --secret-id "$SL_ID" --secret-string <YOUR_SLACK_SIGNING_SECRET>
-```
-
-Lambda fetches secrets on cold start and caches per warm container, so a
-warm container will keep using the old value until it recycles. For
-immediate pickup, force a redeploy:
-
-```bash
-aws lambda update-function-code --profile dangote-dev --region eu-west-1 \
-  --function-name $(terraform output -raw function_name) \
-  --zip-file fileb://build/lambda.zip
-```
-
-## Wire up Slack
-
-```bash
-terraform output function_url   # → paste into Slack slash command
+terraform output slack_request_url
+# → https://<api-id>.execute-api.eu-west-1.amazonaws.com/prod/deploy
+# Paste into the Slack slash-command Request URL.
 ```
 
 ## Updating Lambda code
 
-Just edit files in `../lambda/src/` and re-run `terraform apply`. The
-`archive_file` data source notices content changes and Terraform redeploys.
+Edit `../lambda/src/`, re-export the two `TF_VAR_*` env vars, then
+`terraform apply`. The `archive_file` data source notices content
+changes and Terraform redeploys.
+
+## Rotating secrets
+
+```bash
+read -rs TF_VAR_github_token; export TF_VAR_github_token
+terraform apply
+```
+
+Lambda env vars update in-place; the next invocation sees the new value.
 
 ## Tear down
 
@@ -80,15 +73,23 @@ Just edit files in `../lambda/src/` and re-run `terraform apply`. The
 terraform destroy
 ```
 
-`recovery_window_in_days = 0` on the secrets means names are reusable
-immediately after destroy.
-
 ## Files
 
 | File | Purpose |
 |---|---|
-| `main.tf` | Provider + Lambda + Function URL + Secrets Manager + IAM |
-| `variables.tf` | Input variables — non-secret only |
-| `outputs.tf` | Function URL, secret IDs, post-apply commands |
-| `terraform.tfvars.example` | Template — copy to `terraform.tfvars` |
+| `main.tf` | Provider + Lambda + API Gateway + IAM |
+| `variables.tf` | Input variables — two are sensitive (`github_token`, `slack_signing_secret`) |
+| `outputs.tf` | Slack request URL + function name |
+| `terraform.tfvars.example` | Template — copy to `terraform.tfvars` (non-secret only) |
 | `.gitignore` | Ignores state, tfvars, build/; commits `.terraform.lock.hcl` |
+
+## Honest caveats
+
+- Secret values live in Lambda's `environment.variables` block. Anyone with
+  `lambda:GetFunctionConfiguration` on this function (in this account: anyone
+  with admin) can read them. This is acceptable for a single-operator tool;
+  for multi-team environments, prefer Secrets Manager.
+- Secret values land in `terraform.tfstate` (in the S3 state bucket). Same
+  blast radius as the IAM that already controls the bucket.
+- Don't `print(os.environ)` or anything that dumps env vars in the Lambda
+  code — it leaks secrets to CloudWatch.

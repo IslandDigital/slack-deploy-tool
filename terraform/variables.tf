@@ -12,7 +12,7 @@ variable "aws_profile" {
 
 variable "name_prefix" {
   type        = string
-  description = "Prefix for IAM and Secrets Manager resource names."
+  description = "Prefix for IAM resource names."
   default     = "slack-deploy"
 }
 
@@ -36,4 +36,16 @@ variable "github_workflow" {
   type        = string
   description = "Workflow filename to dispatch (e.g. deploy.yml)."
   default     = "deploy.yml"
+}
+
+variable "github_token" {
+  type        = string
+  description = "GitHub PAT with repo + workflow scopes. Set via TF_VAR_github_token; never commit."
+  sensitive   = true
+}
+
+variable "slack_signing_secret" {
+  type        = string
+  description = "Slack app signing secret. Set via TF_VAR_slack_signing_secret; never commit."
+  sensitive   = true
 }

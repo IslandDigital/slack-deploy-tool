@@ -1,13 +1,17 @@
 # Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
-# Holds NON-SECRET config only. Secret values are written into AWS Secrets
-# Manager via `aws secretsmanager put-secret-value` after `terraform apply` —
-# they never enter Terraform inputs or state.
+# This file holds NON-SECRET config only. The two secret variables
+# (github_token, slack_signing_secret) MUST be supplied via env vars at
+# apply time so they never land on disk:
+#
+#   read -rs TF_VAR_github_token; export TF_VAR_github_token
+#   read -rs TF_VAR_slack_signing_secret; export TF_VAR_slack_signing_secret
+#   terraform apply
 
 github_owner    = "my-org"
 github_repo     = "my-repo"
 github_workflow = "deploy.yml"
 
-# Defaults that you may want to override:
+# Defaults you may want to override:
 # region        = "eu-west-1"
 # aws_profile   = "dangote-dev"
 # function_name = "slack-deploy"

@@ -37,21 +37,6 @@ data "archive_file" "lambda" {
 }
 
 # -----------------------------------------------------------------------------
-# Secrets Manager — empty shells; values seeded manually post-apply
-# -----------------------------------------------------------------------------
-resource "aws_secretsmanager_secret" "github_token" {
-  name                    = "${var.name_prefix}/github-token"
-  description             = "GitHub PAT for workflow_dispatch (seeded out-of-band)"
-  recovery_window_in_days = 0
-}
-
-resource "aws_secretsmanager_secret" "slack_signing_secret" {
-  name                    = "${var.name_prefix}/slack-signing-secret"
-  description             = "Slack signing secret for HMAC validation (seeded out-of-band)"
-  recovery_window_in_days = 0
-}
-
-# -----------------------------------------------------------------------------
 # IAM
 # -----------------------------------------------------------------------------
 data "aws_iam_policy_document" "lambda_assume" {
@@ -74,22 +59,6 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-data "aws_iam_policy_document" "secrets_read" {
-  statement {
-    actions = ["secretsmanager:GetSecretValue"]
-    resources = [
-      aws_secretsmanager_secret.github_token.arn,
-      aws_secretsmanager_secret.slack_signing_secret.arn,
-    ]
-  }
-}
-
-resource "aws_iam_role_policy" "secrets_read" {
-  name   = "${var.name_prefix}-secrets-read"
-  role   = aws_iam_role.lambda.id
-  policy = data.aws_iam_policy_document.secrets_read.json
-}
-
 # -----------------------------------------------------------------------------
 # CloudWatch logs — explicit so retention is set on creation
 # -----------------------------------------------------------------------------
@@ -99,7 +68,9 @@ resource "aws_cloudwatch_log_group" "lambda" {
 }
 
 # -----------------------------------------------------------------------------
-# Lambda function + Function URL
+# Lambda function — secrets are passed as env vars (Terraform-managed,
+# values come from sensitive variables backed by TF_VAR_* env vars at apply
+# time so they never land in any file or shell history).
 # -----------------------------------------------------------------------------
 resource "aws_lambda_function" "this" {
   function_name    = var.function_name
@@ -113,11 +84,11 @@ resource "aws_lambda_function" "this" {
 
   environment {
     variables = {
-      GITHUB_TOKEN_ARN         = aws_secretsmanager_secret.github_token.arn
-      SLACK_SIGNING_SECRET_ARN = aws_secretsmanager_secret.slack_signing_secret.arn
-      GITHUB_OWNER             = var.github_owner
-      GITHUB_REPO              = var.github_repo
-      GITHUB_WORKFLOW          = var.github_workflow
+      GITHUB_TOKEN         = var.github_token
+      SLACK_SIGNING_SECRET = var.slack_signing_secret
+      GITHUB_OWNER         = var.github_owner
+      GITHUB_REPO          = var.github_repo
+      GITHUB_WORKFLOW      = var.github_workflow
     }
   }
 
@@ -129,8 +100,10 @@ resource "aws_lambda_function" "this" {
 
 # -----------------------------------------------------------------------------
 # REST API Gateway in front of the Lambda
-# (Function URL was blocked by an org-level SCP/RCP — API Gateway invokes the
-#  Lambda via apigateway.amazonaws.com IAM principal, sidestepping that block.)
+# (Function URL was blocked by an org-level SCP/RCP returning 403
+#  AccessDeniedException despite a correct resource policy. API Gateway
+#  invokes the Lambda via the apigateway.amazonaws.com IAM principal, which
+#  isn't subject to the same public-access restriction.)
 # -----------------------------------------------------------------------------
 resource "aws_api_gateway_rest_api" "this" {
   name        = var.function_name
