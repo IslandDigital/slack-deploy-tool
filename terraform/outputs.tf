@@ -1,5 +1,5 @@
-output "function_url" {
-  value       = aws_lambda_function_url.this.function_url
+output "slack_request_url" {
+  value       = "${aws_api_gateway_stage.prod.invoke_url}/deploy"
   description = "Paste this into the Slack slash command Request URL."
 }
 
