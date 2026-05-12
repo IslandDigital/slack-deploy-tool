@@ -49,3 +49,9 @@ variable "slack_signing_secret" {
   description = "Slack app signing secret. Set via TF_VAR_slack_signing_secret; never commit."
   sensitive   = true
 }
+
+variable "slack_bot_token" {
+  type        = string
+  description = "Slack bot token (xoxb-...). Required for views.open. Set via TF_VAR_slack_bot_token."
+  sensitive   = true
+}

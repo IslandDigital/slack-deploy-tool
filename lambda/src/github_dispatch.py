@@ -1,3 +1,4 @@
+"""Trigger workflow_dispatch with an arbitrary inputs dict."""
 import json
 import urllib.error
 import urllib.request
@@ -8,12 +9,12 @@ def trigger_deployment(
     owner: str,
     repo: str,
     workflow: str,
-    environment: str,
+    inputs: dict,
     ref: str = "main",
     timeout_seconds: float = 10.0,
 ) -> None:
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
-    payload = json.dumps({"ref": ref, "inputs": {"environment": environment}}).encode("utf-8")
+    payload = json.dumps({"ref": ref, "inputs": inputs}).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=payload,

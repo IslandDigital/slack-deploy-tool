@@ -86,6 +86,7 @@ resource "aws_lambda_function" "this" {
     variables = {
       GITHUB_TOKEN         = var.github_token
       SLACK_SIGNING_SECRET = var.slack_signing_secret
+      SLACK_BOT_TOKEN      = var.slack_bot_token
       GITHUB_OWNER         = var.github_owner
       GITHUB_REPO          = var.github_repo
       GITHUB_WORKFLOW      = var.github_workflow
