@@ -1,0 +1,19 @@
+# Local terraform state
+*.tfstate
+*.tfstate.*
+*.tfstate.lock.info
+
+# Variable files (may contain secrets)
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Working dirs and crash logs
+.terraform/
+crash.log
+crash.*.log
+
+# Plan output
+*.tfplan
+
+# Note: .terraform.lock.hcl IS committed for reproducible provider versions
