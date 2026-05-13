@@ -7,7 +7,12 @@ from app_catalog import APPS, list_apps
 from github_dispatch import trigger_deployment
 from github_tags import list_all_tags, tags_for_app_env
 from slack_signature import is_valid
-from slack_views import build_deploy_modal, build_version_options, open_modal
+from slack_views import (
+    build_deploy_modal,
+    build_version_options,
+    open_modal,
+    post_to_response_url,
+)
 
 
 def _resp(status: int, body: str = "") -> dict:
@@ -51,12 +56,15 @@ def lambda_handler(event: dict, context) -> dict:
 # -----------------------------------------------------------------------------
 def _handle_slash_command(form: dict) -> dict:
     trigger_id = form.get("trigger_id", [""])[0]
+    response_url = form.get("response_url", [""])[0]
     if not trigger_id:
         return _resp(200, "Slash command missing trigger_id.")
 
     try:
         open_modal(
-            os.environ["SLACK_BOT_TOKEN"], trigger_id, build_deploy_modal(list_apps())
+            os.environ["SLACK_BOT_TOKEN"],
+            trigger_id,
+            build_deploy_modal(list_apps(), response_url=response_url),
         )
     except Exception as exc:
         print(f"views.open failed: {exc}")
@@ -128,7 +136,10 @@ def _handle_view_submission(payload: dict) -> dict:
     environment = values["env_block"]["env_select"]["selected_option"]["value"]
     app = values["app_block"]["app_select"]["selected_option"]["value"]
     version = values["version_block"]["version_select"]["selected_option"]["value"]
-    user_name = payload.get("user", {}).get("username", "?")
+    user = payload.get("user", {})
+    user_id = user.get("id", "")
+    user_name = user.get("username", "?")
+    response_url = _response_url_from_view(payload.get("view", {}))
 
     inputs = _build_workflow_inputs(environment=environment, app=app, version=version)
 
@@ -148,7 +159,30 @@ def _handle_view_submission(payload: dict) -> dict:
         })
 
     print(f"deploy dispatched: app={app} env={environment} version={version} by={user_name}")
+
+    if response_url:
+        version_label = "latest (HEAD)" if version == "__head__" else version
+        announcement = (
+            f"<@{user_id}> triggered deploy of `{app}` to `{environment}`"
+            f" — version `{version_label}`"
+        )
+        try:
+            post_to_response_url(response_url, announcement)
+        except Exception as exc:
+            # Non-fatal — the deploy already kicked off.
+            print(f"channel announcement failed: {exc}")
+
     return _resp(200)
+
+
+def _response_url_from_view(view: dict) -> str:
+    raw = view.get("private_metadata") or ""
+    if not raw:
+        return ""
+    try:
+        return json.loads(raw).get("response_url", "")
+    except json.JSONDecodeError:
+        return ""
 
 
 def _build_workflow_inputs(environment: str, app: str, version: str) -> dict:

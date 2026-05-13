@@ -12,13 +12,14 @@ import urllib.request
 ENVIRONMENTS = ["dev", "test"]
 
 
-def build_deploy_modal(apps: list[str]) -> dict:
+def build_deploy_modal(apps: list[str], response_url: str = "") -> dict:
     env_options = [_opt(e) for e in ENVIRONMENTS]
     app_options = [_opt(a) for a in apps]
 
     return {
         "type": "modal",
         "callback_id": "deploy_submit",
+        "private_metadata": json.dumps({"response_url": response_url}),
         "title": _txt("Deploy"),
         "submit": _txt("Deploy"),
         "close": _txt("Cancel"),
@@ -63,6 +64,26 @@ def build_deploy_modal(apps: list[str]) -> dict:
 def build_version_options(tags: list[str]) -> dict:
     options = [_opt("latest (HEAD)", "__head__")] + [_opt(t) for t in tags]
     return {"options": options[:100]}
+
+
+def post_to_response_url(response_url: str, text: str, timeout_seconds: float = 3.0) -> None:
+    """Post an in-channel message back via the slash command's response_url.
+
+    response_url is valid for 30 minutes and allows up to 5 messages. No bot
+    scopes required — Slack treats this as the slash command's own reply.
+    """
+    payload = json.dumps({"response_type": "in_channel", "text": text}).encode("utf-8")
+    req = urllib.request.Request(
+        response_url,
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "User-Agent": "slack-deploy-tool",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+        resp.read()
 
 
 def open_modal(bot_token: str, trigger_id: str, view: dict, timeout_seconds: float = 3.0) -> None:
