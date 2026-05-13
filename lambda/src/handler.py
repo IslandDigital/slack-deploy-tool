@@ -90,11 +90,21 @@ def _handle_block_suggestion(payload: dict) -> dict:
     env = _selected_value(payload, "env_block", "env_select")
     app = _selected_value(payload, "app_block", "app_select")
 
+    state_keys = list(
+        payload.get("view", {}).get("state", {}).get("values", {}).keys()
+    )
+    print(
+        f"block_suggestion: action_id={action_id} env={env!r} app={app!r} "
+        f"state_blocks={state_keys}"
+    )
+
     if action_id == "app_select":
         return _json_resp(200, _app_options_for_env(env))
 
     if action_id == "version_select":
-        return _json_resp(200, _version_options_for_app_env(app, env))
+        result = _version_options_for_app_env(app, env)
+        print(f"version_select returning {len(result.get('options', []))} options")
+        return _json_resp(200, result)
 
     return _json_resp(200, {"options": []})
 
