@@ -6,14 +6,14 @@ import urllib.request
 ENVIRONMENTS = ["dev", "test"]
 
 
-def build_deploy_modal(apps: list[str]) -> dict:
-    """Initial modal — env + app are static, version is external_select.
+def build_deploy_modal() -> dict:
+    """Initial modal — env is static, app and version are external_select (cascading).
 
-    External_select means Slack POSTs back to us with block_suggestion when the
-    user opens the version dropdown; we return tags filtered to the chosen app.
+    App options are fetched once env is selected (filtered by env).
+    Version options are fetched once both env and app are selected
+    (filtered by `<app>@<env>@` prefix).
     """
     env_options = [_opt(e) for e in ENVIRONMENTS]
-    app_options = [_opt(a) for a in apps]
 
     return {
         "type": "modal",
@@ -38,10 +38,10 @@ def build_deploy_modal(apps: list[str]) -> dict:
                 "block_id": "app_block",
                 "label": _txt("App"),
                 "element": {
-                    "type": "static_select",
+                    "type": "external_select",
                     "action_id": "app_select",
-                    "options": app_options,
-                    "initial_option": app_options[0],
+                    "placeholder": _txt("pick an app"),
+                    "min_query_length": 0,
                 },
             },
             {
@@ -59,8 +59,13 @@ def build_deploy_modal(apps: list[str]) -> dict:
     }
 
 
+def build_app_options(apps: list[str]) -> dict:
+    """Block-suggestion response shape for app_select."""
+    return {"options": [_opt(a) for a in apps][:100]}
+
+
 def build_version_options(tags: list[str]) -> dict:
-    """Block-suggestion response shape: {options: [...]}."""
+    """Block-suggestion response shape for version_select. Includes a HEAD sentinel."""
     options = [_opt("latest (HEAD)", "__head__")] + [_opt(t) for t in tags]
     return {"options": options[:100]}
 

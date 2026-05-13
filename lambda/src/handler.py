@@ -5,9 +5,14 @@ import urllib.parse
 
 from app_catalog import APPS, list_apps
 from github_dispatch import trigger_deployment
-from github_tags import list_tags_for_app
+from github_tags import apps_with_tags_for_env, list_all_tags, tags_for_app_env
 from slack_signature import is_valid
-from slack_views import build_deploy_modal, build_version_options, open_modal
+from slack_views import (
+    build_app_options,
+    build_deploy_modal,
+    build_version_options,
+    open_modal,
+)
 
 
 def _resp(status: int, body: str = "") -> dict:
@@ -40,8 +45,6 @@ def lambda_handler(event: dict, context) -> dict:
 
     form = urllib.parse.parse_qs(body, keep_blank_values=True)
 
-    # Slack interactive payloads (view_submission, block_suggestion) arrive as
-    # a single `payload` form field carrying JSON.
     if "payload" in form:
         return _route_interaction(json.loads(form["payload"][0]))
 
@@ -56,9 +59,8 @@ def _handle_slash_command(form: dict) -> dict:
     if not trigger_id:
         return _resp(200, "Slash command missing trigger_id.")
 
-    view = build_deploy_modal(list_apps())
     try:
-        open_modal(os.environ["SLACK_BOT_TOKEN"], trigger_id, view)
+        open_modal(os.environ["SLACK_BOT_TOKEN"], trigger_id, build_deploy_modal())
     except Exception as exc:
         print(f"views.open failed: {exc}")
         return _resp(200, f"Could not open deploy modal: {exc}")
@@ -67,7 +69,7 @@ def _handle_slash_command(form: dict) -> dict:
 
 
 # -----------------------------------------------------------------------------
-# Interactive payload router.
+# Interactive payload router (view_submission, block_suggestion).
 # -----------------------------------------------------------------------------
 def _route_interaction(payload: dict) -> dict:
     kind = payload.get("type")
@@ -79,32 +81,66 @@ def _route_interaction(payload: dict) -> dict:
 
 
 # -----------------------------------------------------------------------------
-# Block suggestion — populates the Version dropdown for the currently-selected App.
+# Block suggestion — populates cascading dropdowns:
+#   app_select     ← filtered to apps with tags for the selected env
+#   version_select ← filtered to tags matching `<app>@<env>@`
 # -----------------------------------------------------------------------------
 def _handle_block_suggestion(payload: dict) -> dict:
-    if payload.get("action_id") != "version_select":
-        return _json_resp(200, {"options": []})
+    action_id = payload.get("action_id")
+    env = _selected_value(payload, "env_block", "env_select")
+    app = _selected_value(payload, "app_block", "app_select")
 
-    app = _selected_app(payload) or next(iter(APPS))
+    if action_id == "app_select":
+        return _json_resp(200, _app_options_for_env(env))
+
+    if action_id == "version_select":
+        return _json_resp(200, _version_options_for_app_env(app, env))
+
+    return _json_resp(200, {"options": []})
+
+
+def _app_options_for_env(env: str | None) -> dict:
+    if not env:
+        return build_app_options(list_apps())
     try:
-        tags = list_tags_for_app(
+        all_tags = list_all_tags(
             token=os.environ["GITHUB_TOKEN"],
             owner=os.environ["GITHUB_OWNER"],
             repo=os.environ["GITHUB_REPO"],
-            app=app,
         )
     except Exception as exc:
-        print(f"tag list failed for {app}: {exc}")
-        tags = []
+        print(f"all-tags fetch failed: {exc}")
+        return build_app_options(list_apps())
 
-    return _json_resp(200, build_version_options(tags))
+    filtered = apps_with_tags_for_env(all_tags, env, list_apps())
+    # If no app has tags for this env yet (e.g. first deploy to a new env),
+    # fall back to showing every app so the user isn't blocked.
+    return build_app_options(filtered or list_apps())
 
 
-def _selected_app(payload: dict) -> str | None:
-    values = payload.get("view", {}).get("state", {}).get("values", {})
+def _version_options_for_app_env(app: str | None, env: str | None) -> dict:
+    if not app or not env:
+        return build_version_options([])
+    try:
+        all_tags = list_all_tags(
+            token=os.environ["GITHUB_TOKEN"],
+            owner=os.environ["GITHUB_OWNER"],
+            repo=os.environ["GITHUB_REPO"],
+        )
+    except Exception as exc:
+        print(f"all-tags fetch failed: {exc}")
+        return build_version_options([])
+
+    return build_version_options(tags_for_app_env(all_tags, app, env))
+
+
+def _selected_value(payload: dict, block_id: str, action_id: str) -> str | None:
     return (
-        values.get("app_block", {})
-        .get("app_select", {})
+        payload.get("view", {})
+        .get("state", {})
+        .get("values", {})
+        .get(block_id, {})
+        .get(action_id, {})
         .get("selected_option", {})
         .get("value")
     )
@@ -138,7 +174,6 @@ def _handle_view_submission(payload: dict) -> dict:
         })
 
     print(f"deploy dispatched: app={app} env={environment} version={version} by={user_name}")
-    # Empty 200 → Slack closes the modal.
     return _resp(200)
 
 
