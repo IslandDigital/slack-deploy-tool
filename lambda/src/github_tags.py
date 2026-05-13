@@ -1,6 +1,8 @@
 """Fetch + filter git tags from the target repo. One bulk fetch, all filtering client-side.
 
-Tag convention: `<app>@<env>@YYYY.MM.DD.N`, e.g. `filing-next@dev@2026.05.08.4`.
+Two tag conventions coexist in IslandDigital/tax-web:
+  3-segment (env-aware, newer):  `<app>@<env>@YYYY.MM.DD.N`  — filter by app + env
+  2-segment (legacy):            `<app>@<version>`           — filter by app only
 """
 import json
 import time
@@ -49,11 +51,30 @@ def list_all_tags(
 
 
 def tags_for_app_env(all_tags: list[str], app: str, env: str) -> list[str]:
-    """Return up to MAX_TAGS_RETURNED tags matching `<app>@<env>@*`, newest-first."""
-    prefix = f"{app}@{env}@"
-    return [t for t in all_tags if t.startswith(prefix)][:MAX_TAGS_RETURNED]
+    """Tags matching `<app>@<env>@*` (3-seg, env-aware) OR `<app>@*` (2-seg legacy).
+
+    Newest-first, capped at MAX_TAGS_RETURNED.
+    """
+    matches: list[str] = []
+    for tag in all_tags:
+        parts = tag.split("@")
+        if len(parts) >= 3 and parts[0] == app and parts[1] == env:
+            matches.append(tag)
+        elif len(parts) == 2 and parts[0] == app:
+            matches.append(tag)
+    return matches[:MAX_TAGS_RETURNED]
 
 
 def apps_with_tags_for_env(all_tags: list[str], env: str, candidate_apps: list[str]) -> list[str]:
-    """Return apps from `candidate_apps` that have at least one tag for `env`."""
-    return [a for a in candidate_apps if any(t.startswith(f"{a}@{env}@") for t in all_tags)]
+    """Apps with a 3-seg tag for this env. If no app has any 3-seg tag for this env
+    (e.g. env-tagging hasn't started here yet), return every candidate so the user
+    isn't blocked from picking any app."""
+    any_env_specific = any(
+        len(t.split("@")) >= 3 and t.split("@")[1] == env for t in all_tags
+    )
+    if not any_env_specific:
+        return list(candidate_apps)
+    return [
+        app for app in candidate_apps
+        if any(t.startswith(f"{app}@{env}@") for t in all_tags)
+    ]
