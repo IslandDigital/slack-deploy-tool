@@ -1,4 +1,10 @@
-"""Slack Block Kit modal definition + views.open API call."""
+"""Slack Block Kit modal definition + views.open API call.
+
+App dropdown is static_select (not external) because Slack's view.state.values
+isn't updated for external_select inside input blocks until the modal is
+submitted — which breaks the version dropdown's ability to read the picked
+app at block_suggestion time. Trade-off: all apps are shown regardless of env.
+"""
 import json
 import urllib.error
 import urllib.request
@@ -6,14 +12,9 @@ import urllib.request
 ENVIRONMENTS = ["dev", "test"]
 
 
-def build_deploy_modal() -> dict:
-    """Initial modal — env is static, app and version are external_select (cascading).
-
-    App options are fetched once env is selected (filtered by env).
-    Version options are fetched once both env and app are selected
-    (filtered by `<app>@<env>@` prefix).
-    """
+def build_deploy_modal(apps: list[str]) -> dict:
     env_options = [_opt(e) for e in ENVIRONMENTS]
+    app_options = [_opt(a) for a in apps]
 
     return {
         "type": "modal",
@@ -38,10 +39,10 @@ def build_deploy_modal() -> dict:
                 "block_id": "app_block",
                 "label": _txt("App"),
                 "element": {
-                    "type": "external_select",
+                    "type": "static_select",
                     "action_id": "app_select",
-                    "placeholder": _txt("pick an app"),
-                    "min_query_length": 0,
+                    "options": app_options,
+                    "initial_option": app_options[0],
                 },
             },
             {
@@ -59,13 +60,7 @@ def build_deploy_modal() -> dict:
     }
 
 
-def build_app_options(apps: list[str]) -> dict:
-    """Block-suggestion response shape for app_select."""
-    return {"options": [_opt(a) for a in apps][:100]}
-
-
 def build_version_options(tags: list[str]) -> dict:
-    """Block-suggestion response shape for version_select. Includes a HEAD sentinel."""
     options = [_opt("latest (HEAD)", "__head__")] + [_opt(t) for t in tags]
     return {"options": options[:100]}
 

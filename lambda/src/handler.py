@@ -5,14 +5,9 @@ import urllib.parse
 
 from app_catalog import APPS, list_apps
 from github_dispatch import trigger_deployment
-from github_tags import apps_with_tags_for_env, list_all_tags, tags_for_app_env
+from github_tags import list_all_tags, tags_for_app_env
 from slack_signature import is_valid
-from slack_views import (
-    build_app_options,
-    build_deploy_modal,
-    build_version_options,
-    open_modal,
-)
+from slack_views import build_deploy_modal, build_version_options, open_modal
 
 
 def _resp(status: int, body: str = "") -> dict:
@@ -60,7 +55,9 @@ def _handle_slash_command(form: dict) -> dict:
         return _resp(200, "Slash command missing trigger_id.")
 
     try:
-        open_modal(os.environ["SLACK_BOT_TOKEN"], trigger_id, build_deploy_modal())
+        open_modal(
+            os.environ["SLACK_BOT_TOKEN"], trigger_id, build_deploy_modal(list_apps())
+        )
     except Exception as exc:
         print(f"views.open failed: {exc}")
         return _resp(200, f"Could not open deploy modal: {exc}")
@@ -81,56 +78,21 @@ def _route_interaction(payload: dict) -> dict:
 
 
 # -----------------------------------------------------------------------------
-# Block suggestion — populates cascading dropdowns:
-#   app_select     ← filtered to apps with tags for the selected env
-#   version_select ← filtered to tags matching `<app>@<env>@`
+# Block suggestion — only the version dropdown is external_select.
+# Env and App are static_select (reliably committed to view.state.values).
 # -----------------------------------------------------------------------------
 def _handle_block_suggestion(payload: dict) -> dict:
     action_id = payload.get("action_id")
+    if action_id != "version_select":
+        return _json_resp(200, {"options": []})
+
     env = _selected_value(payload, "env_block", "env_select")
     app = _selected_value(payload, "app_block", "app_select")
+    print(f"version_select: env={env!r} app={app!r}")
 
-    state_keys = list(
-        payload.get("view", {}).get("state", {}).get("values", {}).keys()
-    )
-    print(
-        f"block_suggestion: action_id={action_id} env={env!r} app={app!r} "
-        f"state_blocks={state_keys}"
-    )
-
-    if action_id == "app_select":
-        return _json_resp(200, _app_options_for_env(env))
-
-    if action_id == "version_select":
-        result = _version_options_for_app_env(app, env)
-        print(f"version_select returning {len(result.get('options', []))} options")
-        return _json_resp(200, result)
-
-    return _json_resp(200, {"options": []})
-
-
-def _app_options_for_env(env: str | None) -> dict:
-    if not env:
-        return build_app_options(list_apps())
-    try:
-        all_tags = list_all_tags(
-            token=os.environ["GITHUB_TOKEN"],
-            owner=os.environ["GITHUB_OWNER"],
-            repo=os.environ["GITHUB_REPO"],
-        )
-    except Exception as exc:
-        print(f"all-tags fetch failed: {exc}")
-        return build_app_options(list_apps())
-
-    filtered = apps_with_tags_for_env(all_tags, env, list_apps())
-    # If no app has tags for this env yet (e.g. first deploy to a new env),
-    # fall back to showing every app so the user isn't blocked.
-    return build_app_options(filtered or list_apps())
-
-
-def _version_options_for_app_env(app: str | None, env: str | None) -> dict:
     if not app or not env:
-        return build_version_options([])
+        return _json_resp(200, build_version_options([]))
+
     try:
         all_tags = list_all_tags(
             token=os.environ["GITHUB_TOKEN"],
@@ -139,9 +101,11 @@ def _version_options_for_app_env(app: str | None, env: str | None) -> dict:
         )
     except Exception as exc:
         print(f"all-tags fetch failed: {exc}")
-        return build_version_options([])
+        return _json_resp(200, build_version_options([]))
 
-    return build_version_options(tags_for_app_env(all_tags, app, env))
+    filtered = tags_for_app_env(all_tags, app, env)
+    print(f"version_select returning {len(filtered)} tags for {app}/{env}")
+    return _json_resp(200, build_version_options(filtered))
 
 
 def _selected_value(payload: dict, block_id: str, action_id: str) -> str | None:
